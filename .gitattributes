@@ -1,0 +1,16 @@
+* text=auto
+
+*.go text eol=lf
+*.mod text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.pem text eol=lf
+*.yml text eol=lf
+
+dist/App/PocketStream/ffmpeg/ffmpeg binary
+dist/App/PocketStream/zapret/tpws binary
+dist/App/PocketStream/pocketstream binary
+*.png binary
+*.zip binary

@@ -1,0 +1,6 @@
+{
+  "label": "PocketStream",
+  "icon": "/mnt/SDCARD/Icons/Default/app/ffplay.png",
+  "launch": "launch.sh",
+  "description": "Video streaming client"
+}

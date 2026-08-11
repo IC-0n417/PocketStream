@@ -1,0 +1,12 @@
+FFmpeg 7.0.2 static ARMHF build
+
+Binary build: https://www.johnvansickle.com/ffmpeg/
+Archive: https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-armhf-static.tar.xz
+Archive MD5: bd0c3d4821a5ddce1a4339cd00031e38
+SHA-256 (included ffmpeg binary): 0afba4a11110e6e402053e0fc14c33a7eb207d7a588688ae87dba471a0f06c71
+FFmpeg source: https://ffmpeg.org/releases/ffmpeg-7.0.2.tar.xz
+Builder release source index: https://johnvansickle.com/ffmpeg/release-source/
+
+The included ffmpeg binary is used only to demux and remux H.264/AAC DASH
+tracks. PocketStream does not transcode video with it. See GPLv3.txt and
+BUILD-INFO.txt in this directory for license and build details.

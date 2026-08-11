@@ -1,0 +1,7 @@
+Mozilla CA certificate bundle converted and distributed by the curl project.
+Source: https://curl.se/docs/caextract.html
+Bundle: https://curl.se/ca/cacert.pem
+Snapshot: 2026-07-16, 119 certificates
+SHA-256: 3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91
+License: Mozilla Public License 2.0
+https://www.mozilla.org/MPL/2.0/

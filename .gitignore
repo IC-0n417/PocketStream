@@ -1,0 +1,19 @@
+# Local tooling and generated release artifacts
+/work/
+/build/
+/outputs/
+
+# Runtime state from an SD-card installation
+*.log
+*.log.1
+search-history.txt
+.privacy-log-format-v1
+
+# Locally built executable; GitHub Releases are built by CI
+/dist/App/PocketStream/pocketstream
+
+# Editor and OS metadata
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp

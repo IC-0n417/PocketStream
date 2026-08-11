@@ -1,0 +1,10 @@
+zapret v72.13 by bol-van
+Source: https://github.com/bol-van/zapret
+Release: https://github.com/bol-van/zapret/releases/tag/v72.13
+
+Included files:
+- binaries/linux-arm/tpws
+
+PocketStream starts tpws in local SOCKS5 mode for its own HTTPS requests. It does
+not install firewall rules or modify traffic from other OnionOS applications.
+SHA-256 (tpws): 412032484525f7fef8ea7d69e7eefc2c972098aee8879a5f93c70dcfb75b1438

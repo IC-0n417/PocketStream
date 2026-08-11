@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          check-latest: true
+      - name: Validate shell scripts
+        run: sh -n dist/App/PocketStream/launch.sh scripts/*.sh
+      - name: Test and build ARMv7
+        run: sh scripts/build-armv7.sh
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./cmd/... ./internal/...
+      - name: Verify release inputs
+        run: |
+          test "$(sha256sum dist/App/PocketStream/ffmpeg/ffmpeg | cut -d' ' -f1)" = "0afba4a11110e6e402053e0fc14c33a7eb207d7a588688ae87dba471a0f06c71"
+          test "$(sha256sum dist/App/PocketStream/zapret/tpws | cut -d' ' -f1)" = "412032484525f7fef8ea7d69e7eefc2c972098aee8879a5f93c70dcfb75b1438"
+          test "$(sha256sum dist/App/PocketStream/cacert.pem | cut -d' ' -f1)" = "3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91"
