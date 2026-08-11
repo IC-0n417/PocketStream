@@ -1,8 +1,8 @@
 # PocketStream for OnionOS
 
-PocketStream is an experimental, unofficial streaming client for Miyoo Mini Plus.
-It shows a non-personalized trending home feed, searches public videos through a
-configurable Invidious instance, and plays H.264 video through OnionOS's FFplay.
+PocketStream is an experimental, unofficial YouTube client for Miyoo Mini Plus
+running OnionOS. It provides a non-personalized home feed, video search, quality
+selection, and playback without a Google login.
 
 > **MVP status (August 2026):** official public Invidious instances have
 > disabled their JSON APIs. PocketStream therefore reads the normal, JavaScript-free
