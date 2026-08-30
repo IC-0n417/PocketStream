@@ -85,3 +85,7 @@ network response sizes are bounded before full processing.
 PocketStream is not affiliated with or endorsed by Google, YouTube, Invidious,
 Miyoo, or OnionUI. Availability is not guaranteed because Invidious and
 undocumented YouTube playback behavior can change.
+
+## Support
+
+If you enjoy PocketStream, you can [support Miyoo Mini Ports on Boosty](https://boosty.to/miyoominiports/donate).
