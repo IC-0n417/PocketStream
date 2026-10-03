@@ -57,7 +57,7 @@ Release builds require Go 1.26.x and use CGO-disabled ARMv7 output:
 
 ```sh
 sh scripts/build-armv7.sh
-sh scripts/package-release.sh 1.0.21
+sh scripts/package-release.sh 1.0.22
 ```
 
 Git tags matching `v*` run the same tests/build in GitHub Actions and create a

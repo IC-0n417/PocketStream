@@ -24,7 +24,7 @@ const (
 	screenWidth   = 640
 	screenHeight  = 480
 	bytesPerPixel = 4
-	appVersion    = "1.0.21"
+	appVersion    = "1.0.22"
 )
 
 var defaultProviders = []string{

@@ -31,7 +31,7 @@ import (
 
 const (
 	maxResponseBytes  = 2 << 20
-	userAgent         = "PocketStream/1.0.21 (OnionOS; Miyoo Mini Plus)"
+	userAgent         = "PocketStream/1.0.22 (OnionOS; Miyoo Mini Plus)"
 	youtubePlayerURL  = "https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 	pipedAPIHost      = "api.piped.private.coffee"
 	pipedMediaProxy   = "proxy.piped.private.coffee"

@@ -19,10 +19,8 @@ func (a *app) renderHeader(showControls bool) {
 	if !showControls {
 		return
 	}
-	a.fb.uiText(518, 14, 20, "MENU", designWhite)
-	a.fb.uiText(596, 14, 20, keyboardLayouts[a.kbLayout].code, designWhite)
-	a.fb.drawAsset("start", 507, 33)
-	a.fb.drawAsset("select", 572, 33)
+	code := keyboardLayouts[a.kbLayout].code
+	a.fb.uiText(screenWidth-20-uiTextWidth("acme", 20, code), 18, 20, code, designWhite)
 }
 
 func (a *app) pressedAsset(normal string, key uint16) string {
