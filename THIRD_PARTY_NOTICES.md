@@ -16,6 +16,19 @@ The release package also contains the following separately licensed components.
 FFmpeg is a separate executable invoked through pipes. PocketStream's MIT
 license does not replace or narrow FFmpeg's GPL terms.
 
+## Google Fonts: Acme and Anton SC
+
+- Purpose: typography from the supplied PocketStream+ interface design.
+- Source: https://github.com/google/fonts
+- License: SIL Open Font License 1.1; the complete license texts are stored
+  beside the embedded font files in `cmd/pocketstream/assets`.
+
+## golang.org/x/image
+
+- Purpose: rasterization of the embedded OpenType interface fonts.
+- Source: https://go.googlesource.com/image
+- License: BSD 3-Clause.
+
 ## zapret tpws v72.13
 
 - Purpose: local SOCKS5 network-compatibility process used only by PocketStream.

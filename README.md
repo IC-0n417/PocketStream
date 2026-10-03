@@ -4,11 +4,11 @@ PocketStream is an experimental, unofficial YouTube client for Miyoo Mini Plus
 running OnionOS. It provides a non-personalized home feed, video search, quality
 selection, and playback without a Google login.
 
-> **MVP status (August 2026):** official public Invidious instances have
-> disabled their JSON APIs. PocketStream therefore reads the normal, JavaScript-free
-> Invidious search/watch pages. Provider failover, HTML parsing, TLS verification,
-> and the local media relay are covered by tests, but public-instance availability
-> can still change without notice.
+> **Provider status (October 2026):** PocketStream uses Piped for discovery and
+> YouTube's public Android player response for playback. Public Piped stream
+> endpoints are retained only as a fallback because they currently return 5xx
+> for many ordinary videos. Provider failover, response parsing, TLS
+> verification, and the local media relay are covered by tests.
 
 This repository contains an early public MVP. It does not provide a
 server, store videos, support downloads, log in to Google, or bypass private,
@@ -17,14 +17,14 @@ Premium, age, regional, or DRM restrictions.
 ## Current controls
 
 - `D-pad`: select a result or move around the virtual keyboard
-- `D-pad Down` from the last video row: enter the bottom navigation bar
-- `D-pad Left/Right` + `A`: activate Home, Search, History, or Exit
 - `A`: open quality selection / confirm / type a character
 - `B`: return to Home / erase a keyboard character / leave a video
 - `X`: open the virtual keyboard
+- `X` on the virtual keyboard: search
+- `Y` on the home screen: open search history
 - `Y`: type a space while the virtual keyboard is open
 - `Y` in History: clear all locally stored searches
-- `L1` / `R1` on the keyboard: switch EN, DE, RU, ES, or FR layout
+- `L1` / `R1` on the keyboard: switch EN, RU, FR, ES, or DE layout
 - `L1` / `R1`: previous / next results page
 - `START`: search again
 - `MENU`: cancel a dialog / leave a video / exit the app
@@ -38,8 +38,10 @@ Premium, age, regional, or DRM restrictions.
    `/mnt/SDCARD/App/PocketStream`.
 4. Refresh the Apps list and launch PocketStream while Wi-Fi is connected.
 
-The console clock must already be reasonably correct. PocketStream deliberately
-does not change global system time from an unauthenticated network response.
+PocketStream does not change the console's global clock. If the Miyoo clock is
+behind a server certificate by no more than 90 days, PocketStream adjusts only
+that connection's validation time while still checking the CA chain, hostname,
+signature, and expiry.
 
 ## Known limitations
 
@@ -51,12 +53,11 @@ does not change global system time from an unauthenticated network response.
 
 ## Build
 
-Release builds require Go 1.26.x, have no third-party Go dependencies, and use
-CGO-disabled ARMv7 output:
+Release builds require Go 1.26.x and use CGO-disabled ARMv7 output:
 
 ```sh
 sh scripts/build-armv7.sh
-sh scripts/package-release.sh 0.1.0
+sh scripts/package-release.sh 1.0.21
 ```
 
 Git tags matching `v*` run the same tests/build in GitHub Actions and create a
@@ -71,10 +72,10 @@ go run ./cmd/pocketstream --api-smoke "retro gaming"
 
 ## Privacy and project status
 
-Public Invidious instances are third-party services. Their operators can
+Public Piped and Invidious instances are third-party services. Their operators can
 potentially observe an IP address, search terms, and requested video IDs. Do not
-enter credentials into PocketStream. Edit `providers.txt` to choose a different
-instance; only use instances from the official Invidious list.
+enter credentials into PocketStream. Edit `piped-providers.txt` or
+`providers.txt` to choose different instances.
 
 Before publishing a fork or binary, read [SECURITY.md](SECURITY.md),
 [PRIVACY.md](PRIVACY.md), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -82,8 +83,8 @@ The local relay is protected by a random per-playback token and rejects private,
 loopback, link-local, and reserved network targets. Thumbnail dimensions and
 network response sizes are bounded before full processing.
 
-PocketStream is not affiliated with or endorsed by Google, YouTube, Invidious,
-Miyoo, or OnionUI. Availability is not guaranteed because Invidious and
+PocketStream is not affiliated with or endorsed by Google, YouTube, Piped,
+Invidious, Miyoo, or OnionUI. Availability is not guaranteed because provider and
 undocumented YouTube playback behavior can change.
 
 ## Support

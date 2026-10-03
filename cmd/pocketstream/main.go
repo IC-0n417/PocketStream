@@ -24,7 +24,7 @@ const (
 	screenWidth   = 640
 	screenHeight  = 480
 	bytesPerPixel = 4
-	appVersion    = "0.1.0"
+	appVersion    = "1.0.21"
 )
 
 var defaultProviders = []string{
@@ -33,6 +33,12 @@ var defaultProviders = []string{
 	"https://invidious.nerdvpn.de",
 	"https://yt.chocolatemoo53.com",
 	"https://invidious.f5.si",
+}
+
+var defaultPipedProviders = []string{
+	"https://api.piped.private.coffee",
+	"https://pipedapi.ducks.party",
+	"https://pipedapi.wireway.ch",
 }
 
 const (
@@ -75,12 +81,28 @@ func openFramebuffer() (*framebuffer, error) {
 }
 
 func (fb *framebuffer) close() {
-	if fb.pix != nil {
+	if fb.file != nil && fb.pix != nil {
 		_ = syscall.Munmap(fb.pix)
 	}
 	if fb.file != nil {
 		_ = fb.file.Close()
 	}
+	fb.pix = nil
+	fb.file = nil
+}
+
+func (fb *framebuffer) reopen() error {
+	fresh, err := openFramebuffer()
+	if err != nil {
+		return err
+	}
+	fb.file = fresh.file
+	fb.pix = fresh.pix
+	if len(fb.back) != len(fresh.back) {
+		fb.back = fresh.back
+	}
+	fb.flip = fresh.flip
+	return nil
 }
 
 func bgra8888(r, g, b uint8) uint32 {
@@ -214,7 +236,21 @@ func (fb *framebuffer) text(x, y, scale int, value string, color uint32) {
 	}
 }
 
-type inputEvent struct{ code uint16 }
+type inputEvent struct {
+	code    uint16
+	release bool
+}
+
+type recommendationResult struct {
+	videos   []invidious.Video
+	provider string
+	err      error
+}
+
+type thumbnailResult struct {
+	provider string
+	images   map[string]*thumbnailImage
+}
 
 func readInput(path string) (<-chan inputEvent, *os.File, error) {
 	f, err := os.Open(path)
@@ -232,8 +268,8 @@ func readInput(path string) (<-chan inputEvent, *os.File, error) {
 			typ := binary.LittleEndian.Uint16(buf[8:10])
 			code := binary.LittleEndian.Uint16(buf[10:12])
 			value := int32(binary.LittleEndian.Uint32(buf[12:16]))
-			if typ == 1 && value == 1 {
-				ch <- inputEvent{code: code}
+			if typ == 1 && (value == 0 || value == 1) {
+				ch <- inputEvent{code: code, release: value == 0}
 			}
 		}
 	}()
@@ -247,6 +283,7 @@ type app struct {
 	results      []invidious.Video
 	selected     int
 	page         int
+	scrollRow    int
 	provider     string
 	status       string
 	keyboard     bool
@@ -264,6 +301,9 @@ type app struct {
 	history      []string
 	historyPath  string
 	historyIndex int
+	pressedKey   uint16
+	homeNextpage string
+	homeMore     bool
 }
 
 type keyboardLayout struct {
@@ -274,13 +314,13 @@ type keyboardLayout struct {
 
 var keyboardLayouts = []keyboardLayout{
 	{code: "EN", name: "ENGLISH", rows: []string{"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"}},
-	{code: "DE", name: "DEUTSCH", rows: []string{"QWERTZUIOPÜ", "ASDFGHJKLÖÄ", "YXCVBNMß"}},
 	{code: "RU", name: "RUSSIAN", rows: []string{"ЙЦУКЕНГШЩЗХ", "ФЫВАПРОЛДЖЭ", "ЯЧСМИТЬБЮЁ"}},
-	{code: "ES", name: "ESPANOL", rows: []string{"QWERTYUIOP", "ASDFGHJKLÑ", "ZXCVBNM", "ÁÉÍÓÚÜ"}},
 	{code: "FR", name: "FRANCAIS", rows: []string{"AZERTYUIOP", "QSDFGHJKLM", "WXCVBN", "ÉÈÀÇÙ"}},
+	{code: "ES", name: "ESPANOL", rows: []string{"QWERTYUIOP", "ASDFGHJKLÑ", "ZXCVBNM", "ÁÉÍÓÚÜ"}},
+	{code: "DE", name: "DEUTSCH", rows: []string{"QWERTZUIOPÜ", "ASDFGHJKLÖÄ", "YXCVBNMß"}},
 }
 
-var keyboardUtilityRows = []string{"1234567890", " -_.?"}
+var keyboardUtilityRows = []string{"1234567890"}
 
 var qualityOptions = []int{144, 240, 360, 480}
 
@@ -296,6 +336,10 @@ func (a *app) render() {
 	}
 	if a.historyMode {
 		a.renderHistory()
+		return
+	}
+	if a.shouldRenderLoading() {
+		a.renderLoading()
 		return
 	}
 	a.renderGrid()
@@ -323,14 +367,19 @@ func (a *app) search() {
 	a.status = "SEARCHING - PLEASE WAIT"
 	log.Printf("search started length=%d", len([]rune(a.query)))
 	a.results = nil
+	a.homeMore = false
+	a.homeNextpage = ""
 	a.section = "SEARCH RESULTS"
 	a.selected = 0
 	a.page = 0
+	a.scrollRow = 0
 	a.thumbnails = make(map[string]*thumbnailImage)
 	a.render()
+	stopLoading := a.startLoadingAnimation()
 	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 	defer cancel()
 	results, provider, err := a.client.Search(ctx, a.query)
+	stopLoading()
 	if err != nil {
 		a.status = "SEARCH FAILED - TRY R1"
 		logOperationFailure("search", err)
@@ -348,18 +397,24 @@ func (a *app) loadRecommendations() {
 	a.results = nil
 	a.selected = 0
 	a.page = 0
+	a.scrollRow = 0
 	a.thumbnails = make(map[string]*thumbnailImage)
+	a.homeMore = true
+	a.homeNextpage = ""
 	if !networkReady() {
 		a.status = "WIFI OFFLINE - NO IP ROUTE"
 		return
 	}
 	a.status = "LOADING RECOMMENDATIONS..."
 	a.render()
-	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+	stopLoading := a.startLoadingAnimation()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	results, provider, err := a.client.Trending(ctx)
+	stopLoading()
 	if err != nil {
 		a.status = "HOME FEED UNAVAILABLE"
+		log.Printf("recommendations detail: %v", err)
 		logOperationFailure("recommendations", err)
 		return
 	}
@@ -367,6 +422,56 @@ func (a *app) loadRecommendations() {
 	a.provider = provider
 	a.status = fmt.Sprintf("%d RECOMMENDATIONS", len(results))
 	a.loadPageThumbnails()
+}
+
+func (a *app) loadMoreRecommendations() bool {
+	if a.section != "RECOMMENDED" || !a.homeMore || a.provider == "" {
+		return false
+	}
+	a.status = "LOADING MORE..."
+	a.render()
+	stopLoading := a.startLoadingAnimation()
+	defer stopLoading()
+
+	continuation := a.homeNextpage
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		page, nextpage, err := a.client.MoreRecommendations(ctx, a.provider, continuation)
+		cancel()
+		if err != nil {
+			a.status = "MORE VIDEOS UNAVAILABLE - RETRY"
+			logOperationFailure("recommendations continuation", err)
+			return false
+		}
+
+		a.homeNextpage = nextpage
+		a.homeMore = nextpage != ""
+		known := make(map[string]bool, len(a.results))
+		for _, video := range a.results {
+			known[video.VideoID] = true
+		}
+		added := 0
+		for _, video := range page {
+			if video.VideoID == "" || known[video.VideoID] {
+				continue
+			}
+			known[video.VideoID] = true
+			a.results = append(a.results, video)
+			added++
+		}
+		log.Printf("home continuation added=%d total=%d more=%t", added, len(a.results), a.homeMore)
+		if added > 0 {
+			a.status = fmt.Sprintf("%d RECOMMENDATIONS", len(a.results))
+			return true
+		}
+		if !a.homeMore {
+			a.status = "END OF RECOMMENDATIONS"
+			return false
+		}
+		continuation = nextpage
+	}
+	a.status = "LOADING MORE - RETRY"
+	return false
 }
 
 func networkReady() bool {
@@ -391,72 +496,113 @@ func (a *app) play(maxHeight int) {
 	video := a.results[index]
 	a.status = "RESOLVING VIDEO..."
 	a.render()
+	stopLoading := a.startLoadingAnimation()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	streamURL, format, _, err := a.client.Resolve(ctx, video.VideoID)
+	playback, provider, err := a.client.ResolvePlaybackAtMost(ctx, video.VideoID, maxHeight)
+	stopLoading()
+	cancel()
 	if err != nil {
-		cancel()
 		a.status = "VIDEO UNAVAILABLE"
 		logOperationFailure("resolve", err)
 		return
 	}
-	log.Printf("video resolved format=%s", format.Quality)
-	if format.Container == "dash" {
-		tracks, trackErr := a.client.ResolveDASHTracksAtMost(ctx, streamURL, maxHeight)
-		cancel()
-		if trackErr != nil {
-			a.status = "DASH TRACKS FAILED"
-			logOperationFailure("dash tracks", trackErr)
-			return
-		}
-		videoRelay, stopVideo, relayErr := a.client.StartRelay(tracks.VideoURL)
-		if relayErr != nil {
-			a.status = "VIDEO RELAY FAILED"
-			logOperationFailure("video relay", relayErr)
-			return
-		}
-		defer stopVideo()
-		audioRelay, stopAudio, relayErr := a.client.StartRelay(tracks.AudioURL)
-		if relayErr != nil {
-			a.status = "AUDIO RELAY FAILED"
-			logOperationFailure("audio relay", relayErr)
-			return
-		}
-		defer stopAudio()
-		log.Printf("selected DASH tracks quality=%s", tracks.Quality)
-		a.status = "PLAYING " + tracks.Quality + "  MENU/B: EXIT"
+	log.Printf("video resolved quality=%s split=%t", playback.Quality, playback.AudioURL != "")
+	stopped, relayFailed, playErr := a.playResolved(playback)
+	if relayFailed && provider == "youtube.com" {
+		a.status = "RETRYING DIRECT VIDEO..."
 		a.render()
-		stopped, playErr := launchFFplayDASH(videoRelay, audioRelay)
-		if playErr != nil {
+		stopRetryLoading := a.startLoadingAnimation()
+		retryContext, cancelRetry := context.WithTimeout(context.Background(), 15*time.Second)
+		refreshed, retryErr := a.client.ResolveYouTubePlaybackAtMost(retryContext, video.VideoID, maxHeight)
+		cancelRetry()
+		stopRetryLoading()
+		if retryErr == nil {
+			log.Printf("direct video URL refreshed quality=%s split=%t", refreshed.Quality, refreshed.AudioURL != "")
+			stopped, relayFailed, playErr = a.playResolved(refreshed)
+		} else {
+			logOperationFailure("direct video refresh", retryErr)
+		}
+	}
+	if relayFailed && provider == "youtube.com" {
+		a.status = "TRYING BACKUP STREAM..."
+		a.render()
+		stopBackupLoading := a.startLoadingAnimation()
+		backupContext, cancelBackup := context.WithTimeout(context.Background(), 30*time.Second)
+		backup, backupProvider, backupErr := a.client.ResolveFallbackPlaybackAtMost(backupContext, video.VideoID, maxHeight)
+		cancelBackup()
+		stopBackupLoading()
+		if backupErr == nil {
+			log.Printf("backup video resolved provider=%s quality=%s split=%t", backupProvider, backup.Quality, backup.AudioURL != "")
+			stopped, relayFailed, playErr = a.playResolved(backup)
+		} else {
+			logOperationFailure("backup resolve", backupErr)
+		}
+	}
+	if playErr != nil {
+		if relayFailed {
+			a.status = "VIDEO RELAY FAILED"
+			logOperationFailure("video relay", playErr)
+		} else {
 			a.status = "FFPLAY FAILED"
 			logOperationFailure("playback", playErr)
-		} else if stopped {
-			a.suppressExit = true
-			a.status = "VIDEO CLOSED"
-		} else {
-			a.status = "PLAYBACK FINISHED"
 		}
-		return
-	}
-	cancel()
-	relayURL, stopRelay, err := a.client.StartRelay(streamURL)
-	if err != nil {
-		a.status = "VIDEO RELAY FAILED"
-		logOperationFailure("video relay", err)
-		return
-	}
-	defer stopRelay()
-	a.status = "PLAYING " + format.Quality + "  MENU/B: EXIT"
-	a.render()
-	stopped, playErr := launchFFplay(relayURL)
-	if playErr != nil {
-		a.status = "FFPLAY FAILED"
-		logOperationFailure("playback", playErr)
 	} else if stopped {
 		a.suppressExit = true
 		a.status = "VIDEO CLOSED"
 	} else {
 		a.status = "PLAYBACK FINISHED"
 	}
+}
+
+func (a *app) playResolved(playback invidious.Playback) (bool, bool, error) {
+	if playback.AudioURL != "" {
+		videoRelay, stopVideo, err := a.client.StartRelay(playback.VideoURL)
+		if err != nil {
+			return false, true, err
+		}
+		defer stopVideo()
+		audioRelay, stopAudio, err := a.client.StartRelay(playback.AudioURL)
+		if err != nil {
+			return false, true, err
+		}
+		defer stopAudio()
+		log.Printf("selected split tracks quality=%s", playback.Quality)
+		a.status = "PLAYING " + playback.Quality + "  MENU/B: EXIT"
+		a.render()
+		stopped, err := a.runExternalPlayer(func() (bool, error) {
+			return launchFFplayDASH(videoRelay, audioRelay)
+		})
+		return stopped, false, err
+	}
+
+	relayURL, stopRelay, err := a.client.StartRelay(playback.VideoURL)
+	if err != nil {
+		return false, true, err
+	}
+	defer stopRelay()
+	a.status = "PLAYING " + playback.Quality + "  MENU/B: EXIT"
+	a.render()
+	stopped, err := a.runExternalPlayer(func() (bool, error) {
+		return launchFFplay(relayURL)
+	})
+	return stopped, false, err
+}
+
+func (a *app) runExternalPlayer(play func() (bool, error)) (bool, error) {
+	if a.fb == nil || a.fb.file == nil {
+		return play()
+	}
+	a.fb.clear(bgra8888(0, 0, 0))
+	a.fb.present()
+	a.fb.close()
+	stopped, playErr := play()
+	if err := a.fb.reopen(); err != nil {
+		if playErr != nil {
+			return stopped, fmt.Errorf("%v; framebuffer restore failed: %w", playErr, err)
+		}
+		return stopped, fmt.Errorf("framebuffer restore failed: %w", err)
+	}
+	return stopped, playErr
 }
 
 func launchFFplay(streamURL string) (bool, error) {
@@ -583,6 +729,19 @@ func findMediaBinary(paths []string) string {
 }
 
 func (a *app) handle(event inputEvent) bool {
+	if event.release {
+		if a.pressedKey == event.code {
+			a.pressedKey = 0
+			if a.fb != nil {
+				a.render()
+			}
+		}
+		return true
+	}
+	a.pressedKey = event.code
+	if a.fb != nil {
+		a.render()
+	}
 	if a.suppressExit {
 		a.suppressExit = false
 		if event.code == keyEsc || event.code == keyLeftCtrl {
@@ -591,10 +750,10 @@ func (a *app) handle(event inputEvent) bool {
 	}
 	if a.qualityMenu {
 		switch event.code {
-		case keyLeft, keyRight:
-			a.quality ^= 1
-		case keyUp, keyDown:
-			a.quality = (a.quality + 2) % len(qualityOptions)
+		case keyUp, keyLeft:
+			a.quality = (a.quality - 1 + len(qualityOptions)) % len(qualityOptions)
+		case keyDown, keyRight:
+			a.quality = (a.quality + 1) % len(qualityOptions)
 		case keySpace:
 			height := qualityOptions[a.quality]
 			a.qualityMenu = false
@@ -658,7 +817,7 @@ func (a *app) handle(event inputEvent) bool {
 			if len(runes) > 0 {
 				a.query = string(runes[:len(runes)-1])
 			}
-		case keyEnter:
+		case keyEnter, keyLeftShift:
 			a.keyboard = false
 			a.search()
 		case keyE:
@@ -692,36 +851,53 @@ func (a *app) handle(event inputEvent) bool {
 	case keyUp:
 		if a.selected >= gridColumns {
 			a.selected -= gridColumns
+			if a.ensureSelectionVisible() {
+				a.loadPageThumbnails()
+			}
 		}
 	case keyDown:
-		if a.selected+gridColumns < a.resultsOnPage() {
+		if a.selected+gridColumns < len(a.results) {
 			a.selected += gridColumns
-		} else {
-			a.navActive = true
-			a.navSelected = 0
+			if a.ensureSelectionVisible() {
+				a.loadPageThumbnails()
+			}
+		} else if a.loadMoreRecommendations() && a.selected+gridColumns < len(a.results) {
+			a.selected += gridColumns
+			if a.ensureSelectionVisible() {
+				a.loadPageThumbnails()
+			}
 		}
 	case keyLeft:
 		if a.selected%gridColumns > 0 {
 			a.selected--
 		}
 	case keyRight:
-		if a.selected%gridColumns < gridColumns-1 && a.selected+1 < a.resultsOnPage() {
+		if a.selected%gridColumns < gridColumns-1 && a.selected+1 < len(a.results) {
 			a.selected++
 		}
 	case keySpace:
 		a.openQualityMenu()
 	case keyLeftShift:
 		a.keyboard = true
+	case keyLeftAlt:
+		a.historyMode = true
+		a.historyIndex = 0
 	case keyT:
-		if a.page+1 < a.pageCount() {
-			a.page++
-			a.selected = 0
+		if a.selected+gridPageSize >= len(a.results) {
+			a.loadMoreRecommendations()
+		}
+		if len(a.results) > 0 && a.selected+gridPageSize < len(a.results) {
+			a.selected += gridPageSize
+			a.ensureSelectionVisible()
 			a.loadPageThumbnails()
 		}
 	case keyE:
-		if a.page > 0 {
-			a.page--
-			a.selected = 0
+		if a.selected > 0 {
+			a.selected -= gridPageSize
+			if a.selected < 0 {
+				a.selected = 0
+			}
+			a.ensureSelectionVisible()
 			a.loadPageThumbnails()
 		}
 	case keyLeftCtrl:
@@ -897,9 +1073,13 @@ func logOperationFailure(operation string, err error) {
 }
 
 func loadProviders(path string) []string {
+	return loadProvidersWithFallback(path, defaultProviders)
+}
+
+func loadProvidersWithFallback(path string, fallback []string) []string {
 	f, err := os.Open(path)
 	if err != nil {
-		return append([]string(nil), defaultProviders...)
+		return append([]string(nil), fallback...)
 	}
 	defer f.Close()
 	var providers []string
@@ -911,7 +1091,7 @@ func loadProviders(path string) []string {
 		}
 	}
 	if len(providers) == 0 {
-		return append([]string(nil), defaultProviders...)
+		return append([]string(nil), fallback...)
 	}
 	return providers
 }
@@ -926,10 +1106,11 @@ func appDir() string {
 
 func smoke(query, provider string) error {
 	providers := defaultProviders
+	pipedProviders := defaultPipedProviders
 	if provider != "" {
-		providers = []string{strings.TrimRight(provider, "/")}
+		pipedProviders = []string{strings.TrimRight(provider, "/")}
 	}
-	client := invidious.New(providers)
+	client := invidious.NewWithPiped(providers, pipedProviders)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	results, used, err := client.Search(ctx, query)
@@ -941,11 +1122,11 @@ func smoke(query, provider string) error {
 		fmt.Printf("%2d  %s  %s\n", i+1, video.VideoID, video.Title)
 	}
 	if len(results) > 0 {
-		stream, format, used, err := client.Resolve(ctx, results[0].VideoID)
+		playback, used, err := client.ResolvePlaybackAtMost(ctx, results[0].VideoID, 360)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("resolved=%s quality=%s url=%s\n", used, format.Quality, stream)
+		fmt.Printf("resolved=%s quality=%s url=%s split=%t\n", used, playback.Quality, playback.VideoURL, playback.AudioURL != "")
 	}
 	return nil
 }
@@ -986,7 +1167,7 @@ func main() {
 
 	application := &app{
 		fb:          fb,
-		client:      invidious.New(loadProviders(filepath.Join(directory, "providers.txt"))),
+		client:      invidious.NewWithPiped(loadProviders(filepath.Join(directory, "providers.txt")), loadProvidersWithFallback(filepath.Join(directory, "piped-providers.txt"), defaultPipedProviders)),
 		query:       "",
 		status:      "LOADING RECOMMENDATIONS...",
 		section:     "RECOMMENDED",
@@ -995,14 +1176,76 @@ func main() {
 		historyPath: filepath.Join(directory, "search-history.txt"),
 	}
 	application.history = loadSearchHistory(application.historyPath)
+	log.Printf("PocketStream %s started", appVersion)
 	application.render()
-	application.loadRecommendations()
-	application.render()
-	for event := range events {
-		if !application.handle(event) {
-			break
+
+	// The first network request must never own the input loop. On slow DNS or
+	// an unavailable public provider the old startup path ignored every button
+	// until the full timeout elapsed, making the home screen look frozen.
+	recommendations := make(chan recommendationResult, 1)
+	recommendationContext, cancelRecommendations := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelRecommendations()
+	go func() {
+		videos, provider, err := application.client.Trending(recommendationContext)
+		recommendations <- recommendationResult{videos: videos, provider: provider, err: err}
+	}()
+	var thumbnails <-chan thumbnailResult
+	loadingTicker := time.NewTicker(100 * time.Millisecond)
+	defer loadingTicker.Stop()
+	loadingFrame := 1
+	running := true
+	for running {
+		select {
+		case event, ok := <-events:
+			if !ok || !application.handle(event) {
+				running = false
+				continue
+			}
+			application.render()
+		case result := <-recommendations:
+			cancelRecommendations()
+			recommendations = nil
+			if application.section != "RECOMMENDED" {
+				continue
+			}
+			if result.err != nil {
+				application.status = "HOME FEED UNAVAILABLE"
+				log.Printf("recommendations detail: %v", result.err)
+				logOperationFailure("recommendations", result.err)
+				application.render()
+				continue
+			}
+			application.results = result.videos
+			application.provider = result.provider
+			application.homeMore = true
+			application.homeNextpage = ""
+			application.status = fmt.Sprintf("%d RECOMMENDATIONS", len(result.videos))
+			application.render()
+			visible := append([]invidious.Video(nil), result.videos...)
+			if len(visible) > gridPageSize {
+				visible = visible[:gridPageSize]
+			}
+			thumbnailChannel := make(chan thumbnailResult, 1)
+			thumbnails = thumbnailChannel
+			go func(provider string, videos []invidious.Video) {
+				thumbnailChannel <- thumbnailResult{provider: provider, images: fetchThumbnails(application.client, provider, videos, nil)}
+			}(result.provider, visible)
+		case batch := <-thumbnails:
+			thumbnails = nil
+			if batch.provider != application.provider {
+				continue
+			}
+			for videoID, image := range batch.images {
+				application.thumbnails[videoID] = image
+			}
+			application.render()
+		case <-loadingTicker.C:
+			if recommendations != nil && !application.keyboard && !application.historyMode && !application.qualityMenu {
+				application.renderLoadingFrame(loadingFrame)
+				application.fb.present()
+				loadingFrame = (loadingFrame + 1) % 8
+			}
 		}
-		application.render()
 	}
 	fb.clear(bgra8888(0, 0, 0))
 	fb.present()

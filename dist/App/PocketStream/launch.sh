@@ -7,7 +7,7 @@ tpwslog="$appdir/tpws.log"
 pocketlog="$appdir/pocketstream.log"
 governor_path=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 previous_governor=
-tpws_pid=
+tpws_pids=
 
 # Logs and history live on a removable FAT card, where Unix mode bits are not a
 # confidentiality boundary.  Still create new files conservatively, cap their
@@ -42,10 +42,10 @@ rotate_log "$pocketlog"
 cleanup() {
     status=$?
     trap - 0 1 2 15
-    if [ -n "$tpws_pid" ]; then
+    for tpws_pid in $tpws_pids; do
         kill "$tpws_pid" 2>/dev/null
         wait "$tpws_pid" 2>/dev/null
-    fi
+    done
     rm -f /tmp/stay_awake
     if [ -n "$previous_governor" ] && [ -w "$governor_path" ]; then
         echo "$previous_governor" > "$governor_path" 2>/dev/null
@@ -156,18 +156,46 @@ esac
 # compatibility layer and route only PocketStream through it.
 chmod 700 "$appdir/zapret/tpws"
 chmod 700 "$appdir/ffmpeg/ffmpeg"
-"$appdir/zapret/tpws" \
-    --socks --bind-addr=127.0.0.1 --port=987 --debug=0 \
-    --filter-tcp=443 --hostlist-domains=googlevideo.com --split-pos=2 --disorder --new \
+proxy_routes=
+start_tpws() {
+    tpws_port=$1
+    shift
+    "$appdir/zapret/tpws" \
+        --socks --bind-addr=127.0.0.1 --port="$tpws_port" --debug=0 \
+        "$@" \
+        >> "$tpwslog" 2>&1 &
+    tpws_pid=$!
+    sleep 1
+    if kill -0 "$tpws_pid" 2>/dev/null; then
+        tpws_pids="$tpws_pids $tpws_pid"
+        if [ -n "$proxy_routes" ]; then
+            proxy_routes="$proxy_routes,127.0.0.1:$tpws_port"
+        else
+            proxy_routes="127.0.0.1:$tpws_port"
+        fi
+    else
+        echo "tpws route $tpws_port failed to start" >> "$tpwslog"
+    fi
+}
+
+# Keep two genuinely different TLS segmentation strategies. PocketStream
+# probes both and keeps the first route that can read media bytes. --fix-seg is
+# required on the Miyoo kernel when tpws reports "segmentation failed".
+start_tpws 987 \
+    --filter-tcp=443 --hostlist-domains=googlevideo.com \
+    --tlsrec=sniext+1 --split-pos=1,midsld --fix-seg --oob --disorder --new \
     --filter-tcp=80 --methodeol --new \
-    --filter-tcp=443 --split-pos=1,midsld --disorder \
-    >> "$tpwslog" 2>&1 &
-tpws_pid=$!
-sleep 1
-if kill -0 "$tpws_pid" 2>/dev/null; then
-    export POCKETSTREAM_SOCKS5=127.0.0.1:987
+    --filter-tcp=443 --split-pos=1,midsld --disorder
+start_tpws 988 \
+    --filter-tcp=443 --hostlist-domains=googlevideo.com \
+    --tlsrec=midsld --fix-seg --disorder --new \
+    --filter-tcp=80 --methodeol --new \
+    --filter-tcp=443 --split-pos=2 --oob --disorder
+
+if [ -n "$proxy_routes" ]; then
+    export POCKETSTREAM_SOCKS5="$proxy_routes"
 else
-    echo "tpws failed to start" >> "$tpwslog"
+    echo "all tpws routes failed to start" >> "$tpwslog"
 fi
 
 "$appdir/pocketstream" >> "$appdir/pocketstream.log" 2>&1

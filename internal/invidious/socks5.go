@@ -8,12 +8,42 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 )
 
 func socks5DialContext(proxyAddress string) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		return dialSOCKS5(ctx, proxyAddress, network, address)
+	}
+}
+
+func (c *Client) socks5DialContext(proxyAddress string) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return dialSOCKS5(ctx, proxyAddress, network, address)
+		}
+		addresses := c.cachedDNSAddresses(strings.TrimSuffix(strings.ToLower(host), "."))
+		var lastErr error
+		for _, candidate := range addresses {
+			if candidate.IP.To4() == nil {
+				continue
+			}
+			connection, dialErr := dialSOCKS5(ctx, proxyAddress, network, net.JoinHostPort(candidate.IP.String(), port))
+			if dialErr == nil {
+				return connection, nil
+			}
+			lastErr = dialErr
+		}
+		connection, dialErr := dialSOCKS5(ctx, proxyAddress, network, address)
+		if dialErr == nil {
+			return connection, nil
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, dialErr
 	}
 }
 

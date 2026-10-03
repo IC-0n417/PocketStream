@@ -19,10 +19,13 @@ addresses, MAC addresses, Wi-Fi configuration, usernames, and filesystem paths.
 ## Security boundaries
 
 - PocketStream has no Google login and never asks for credentials.
-- Public Invidious instances are independent third parties and are not trusted.
+- Public Piped and Invidious instances are independent third parties and are not trusted.
 - The local media relay listens on loopback and uses a per-playback random token.
 - URLs resolving to loopback, private, link-local, or reserved networks are
   rejected before assets or media are fetched.
+- A stale Miyoo clock may be tolerated only when it is at most 90 days before a
+  certificate's validity window; CA, hostname, signature, and expiry checks
+  remain enabled, and PocketStream never changes the global system clock.
 - FFmpeg and FFplay parse untrusted media. Keep OnionOS and PocketStream updated
   and do not install modified binaries from untrusted mirrors.
 - The bundled `tpws` process is a local compatibility helper, not a VPN or an

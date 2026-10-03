@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
 	"os"
+	"strings"
 	"testing"
 
 	"pocketstream/internal/invidious"
@@ -80,7 +82,7 @@ func TestRenderKeyboardPreview(t *testing.T) {
 
 func TestRenderRussianKeyboardPreview(t *testing.T) {
 	fb := testFramebuffer()
-	application := &app{fb: fb, keyboard: true, query: "МИЮ МИНИ", kbLayout: 2, kbRow: 0, kbCol: 0}
+	application := &app{fb: fb, keyboard: true, query: "МИЮ МИНИ", kbLayout: 1, kbRow: 0, kbCol: 0}
 	application.render()
 	writePreviewFromEnv(t, fb, "POCKETSTREAM_RUSSIAN_PREVIEW")
 }
@@ -146,32 +148,32 @@ func writePreviewFromEnv(t *testing.T, fb *framebuffer, environment string) {
 	}
 }
 
-func TestBottomNavigationOpensSearch(t *testing.T) {
+func TestFooterButtonsOpenSearchAndHistory(t *testing.T) {
 	application := &app{
-		results:     make([]invidious.Video, gridPageSize),
-		selected:    gridColumns,
-		navSelected: 0,
+		results:  make([]invidious.Video, gridPageSize),
+		selected: (gridRows - 1) * gridColumns,
 	}
 	application.handle(inputEvent{code: keyDown})
-	if !application.navActive {
-		t.Fatal("down from the last card row did not activate bottom navigation")
+	if application.selected != (gridRows-1)*gridColumns {
+		t.Fatal("down moved selection beyond the final card row")
 	}
-	application.handle(inputEvent{code: keyRight})
-	if application.navSelected != 1 {
-		t.Fatalf("selected bottom item = %d, want search item 1", application.navSelected)
+	application.handle(inputEvent{code: keyLeftShift})
+	if !application.keyboard {
+		t.Fatal("X did not open the keyboard")
 	}
-	application.handle(inputEvent{code: keySpace})
-	if !application.keyboard || application.navActive {
-		t.Fatal("activating the search tab did not open the keyboard")
+	application.keyboard = false
+	application.handle(inputEvent{code: keyLeftAlt})
+	if !application.historyMode {
+		t.Fatal("Y did not open search history")
 	}
 }
 
-func TestKeyboardHasSpaceInGridAndPhysicalYShortcut(t *testing.T) {
+func TestKeyboardHasNumberRowAndPhysicalYSpaceShortcut(t *testing.T) {
 	application := &app{keyboard: true}
 	application.kbRow = len(application.keyboardRows()) - 1
 	application.handle(inputEvent{code: keySpace})
-	if application.query != " " {
-		t.Fatalf("grid space query = %q, want one space", application.query)
+	if application.query != "1" {
+		t.Fatalf("number row query = %q, want 1", application.query)
 	}
 	application.query = ""
 	application.handle(inputEvent{code: keyLeftAlt})
@@ -182,7 +184,6 @@ func TestKeyboardHasSpaceInGridAndPhysicalYShortcut(t *testing.T) {
 
 func TestKeyboardSwitchesToRussianAndTypesCyrillic(t *testing.T) {
 	application := &app{keyboard: true}
-	application.handle(inputEvent{code: keyT})
 	application.handle(inputEvent{code: keyT})
 	if keyboardLayouts[application.kbLayout].code != "RU" {
 		t.Fatalf("layout = %q, want RU", keyboardLayouts[application.kbLayout].code)
@@ -245,6 +246,109 @@ func TestPlayOpensQualityMenu(t *testing.T) {
 	}
 }
 
+func TestQualityMenuUsesVerticalDPadSelection(t *testing.T) {
+	application := &app{qualityMenu: true}
+	application.handle(inputEvent{code: keyDown})
+	if application.quality != 1 {
+		t.Fatalf("quality index after Down = %d, want 1", application.quality)
+	}
+	application.handle(inputEvent{code: keyUp})
+	if application.quality != 0 {
+		t.Fatalf("quality index after Up = %d, want 0", application.quality)
+	}
+}
+
+func TestPhysicalButtonStateTracksPressAndRelease(t *testing.T) {
+	application := &app{}
+	application.handle(inputEvent{code: keyLeftShift})
+	if application.pressedKey != keyLeftShift {
+		t.Fatalf("pressed key = %d, want X key %d", application.pressedKey, keyLeftShift)
+	}
+	application.handle(inputEvent{code: keyLeftShift, release: true})
+	if application.pressedKey != 0 {
+		t.Fatalf("pressed key remained active after release: %d", application.pressedKey)
+	}
+}
+
+func TestGridScrollsContinuously(t *testing.T) {
+	application := &app{results: make([]invidious.Video, 18)}
+	application.handle(inputEvent{code: keyDown})
+	application.handle(inputEvent{code: keyDown})
+	application.handle(inputEvent{code: keyDown})
+	if application.selected != 9 || application.scrollRow != 2 {
+		t.Fatalf("selected=%d scrollRow=%d, want 9 and 2", application.selected, application.scrollRow)
+	}
+	application.handle(inputEvent{code: keyUp})
+	application.handle(inputEvent{code: keyUp})
+	if application.selected != 3 || application.scrollRow != 1 {
+		t.Fatalf("after scrolling up selected=%d scrollRow=%d, want 3 and 1", application.selected, application.scrollRow)
+	}
+}
+
+func TestCardTitleWrapKeepsCompleteWords(t *testing.T) {
+	title := "A COMPLETE POCKETSTREAM VIDEO TITLE THAT NEEDS MULTIPLE LINES"
+	lines := wrapUIText(title, 12, gridCellWidth-10)
+	if got := strings.Join(lines, " "); got != title {
+		t.Fatalf("wrapped title = %q, want %q", got, title)
+	}
+}
+
+func TestLoadingFramesActuallyRotate(t *testing.T) {
+	fb := testFramebuffer()
+	application := &app{fb: fb}
+	application.renderLoadingFrame(0)
+	first := append([]byte(nil), fb.back...)
+	application.renderLoadingFrame(1)
+	if bytes.Equal(first, fb.back) {
+		t.Fatal("loading frame 1 is identical to frame 0")
+	}
+}
+
+func TestLoadingScreenMatchesDesignBands(t *testing.T) {
+	fb := testFramebuffer()
+	application := &app{fb: fb}
+	application.renderLoadingFrame(0)
+
+	assertPixel := func(x, y int, want uint32) {
+		t.Helper()
+		index := (y*screenWidth + x) * bytesPerPixel
+		got := uint32(fb.back[index]) | uint32(fb.back[index+1])<<8 | uint32(fb.back[index+2])<<16 | uint32(fb.back[index+3])<<24
+		if got != want {
+			t.Fatalf("pixel (%d,%d) = %#08x, want %#08x", x, y, got, want)
+		}
+	}
+
+	assertPixel(500, 30, designBlack)
+	assertPixel(10, 200, designWhite)
+	assertPixel(500, 455, designBlack)
+	assertPixel(165, 242, bgra8888(0, 0, 0))
+	assertPixel(207, 242, designWhite)
+	fb.present()
+	writePreviewFromEnv(t, fb, "POCKETSTREAM_LOADING_PREVIEW")
+}
+
+func TestQualityMenuMatchesVerticalDesign(t *testing.T) {
+	fb := testFramebuffer()
+	application := &app{fb: fb, quality: 3}
+	application.renderQualityMenu()
+
+	assertPixel := func(x, y int, want uint32) {
+		t.Helper()
+		index := (y*screenWidth + x) * bytesPerPixel
+		got := uint32(fb.back[index]) | uint32(fb.back[index+1])<<8 | uint32(fb.back[index+2])<<16 | uint32(fb.back[index+3])<<24
+		if got != want {
+			t.Fatalf("pixel (%d,%d) = %#08x, want %#08x", x, y, got, want)
+		}
+	}
+
+	assertPixel(28, 112, bgra8888(0, 0, 0))
+	assertPixel(28, 316, designRed)
+	assertPixel(300, 150, designGray)
+	assertPixel(300, 330, designWhite)
+	fb.present()
+	writePreviewFromEnv(t, fb, "POCKETSTREAM_QUALITY_PREVIEW")
+}
+
 func TestSearchHistoryPersistsNewestUniqueQueries(t *testing.T) {
 	path := t.TempDir() + "/search-history.txt"
 	application := &app{historyPath: path}
@@ -284,5 +388,19 @@ func TestThumbnailDecoderRejectsOversizedDimensions(t *testing.T) {
 	}
 	if _, err := decodeThumbnail(encoded.Bytes()); err == nil {
 		t.Fatal("oversized JPEG dimensions were accepted")
+	}
+}
+
+func TestThumbnailDecoderAcceptsWebPFromPipedProxy(t *testing.T) {
+	data, err := base64.StdEncoding.DecodeString("UklGRjAAAABXRUJQVlA4ICQAAABQAQCdASoCAAIAAUAmJQBOgC6gAP77LkvF3YjjJ4dVU9ffoAA=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeThumbnail(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Bounds().Dx() != 2 || decoded.Bounds().Dy() != 2 {
+		t.Fatalf("decoded WebP size = %v, want 2x2", decoded.Bounds())
 	}
 }

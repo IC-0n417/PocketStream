@@ -1,0 +1,4 @@
+# Piped API endpoints, tried in order before legacy Invidious providers.
+https://api.piped.private.coffee
+https://pipedapi.ducks.party
+https://pipedapi.wireway.ch

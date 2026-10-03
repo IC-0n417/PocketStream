@@ -6,25 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/jpeg"
+	_ "image/jpeg"
+	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	_ "golang.org/x/image/webp"
 
 	"pocketstream/internal/invidious"
 )
 
 const (
 	gridColumns    = 3
-	gridRows       = 2
+	gridRows       = 3
 	gridPageSize   = gridColumns * gridRows
-	gridMargin     = 8
-	gridGap        = 8
-	gridTop        = 88
-	gridCellWidth  = 203
-	gridCellHeight = 164
-	thumbWidth     = 203
-	thumbHeight    = 114
+	gridMargin     = 11
+	gridGap        = 9
+	gridTop        = 75
+	gridCellWidth  = 200
+	gridCellHeight = 140
+	thumbWidth     = 200
+	thumbHeight    = 100
 )
 
 type thumbnailImage struct {
@@ -47,7 +51,7 @@ func (fb *framebuffer) rightTriangle(x, y, size int, color uint32) {
 	}
 }
 
-func (a *app) renderGrid() {
+func (a *app) legacyRenderGrid() {
 	nearBlack := bgra8888(15, 15, 15)
 	white := bgra8888(255, 255, 255)
 	accentRed := bgra8888(255, 0, 0)
@@ -91,7 +95,7 @@ func (a *app) renderGrid() {
 
 	if len(a.results) == 0 {
 		a.renderEmptyHome(nearBlack, textGray)
-		a.renderBottomBar(accentRed, nearBlack, textGray, divider, white)
+		a.legacyRenderBottomBar(accentRed, nearBlack, textGray, divider, white)
 		return
 	}
 
@@ -128,7 +132,7 @@ func (a *app) renderGrid() {
 		}
 	}
 
-	a.renderBottomBar(accentRed, nearBlack, textGray, divider, white)
+	a.legacyRenderBottomBar(accentRed, nearBlack, textGray, divider, white)
 }
 
 func (a *app) renderEmptyHome(black, gray uint32) {
@@ -136,7 +140,7 @@ func (a *app) renderEmptyHome(black, gray uint32) {
 	a.fb.centeredText(screenWidth/2, 246, 1, "X SEARCH   HOME RELOADS RECOMMENDATIONS", gray)
 }
 
-func (a *app) renderBottomBar(red, black, gray, divider, white uint32) {
+func (a *app) legacyRenderBottomBar(red, black, gray, divider, white uint32) {
 	a.fb.rect(0, 423, screenWidth, 57, white)
 	a.fb.rect(0, 423, screenWidth, 2, divider)
 
@@ -170,7 +174,7 @@ func (fb *framebuffer) centeredText(center, y, scale int, value string, color ui
 	fb.text(center-width/2, y, scale, text, color)
 }
 
-func (a *app) renderKeyboard() {
+func (a *app) legacyRenderKeyboard() {
 	black := bgra8888(15, 15, 15)
 	white := bgra8888(255, 255, 255)
 	red := bgra8888(255, 0, 0)
@@ -234,7 +238,7 @@ func (a *app) renderKeyboard() {
 	a.fb.text(532, 449, 1, "MENU BACK", black)
 }
 
-func (a *app) renderQualityMenu() {
+func (a *app) legacyRenderQualityMenu() {
 	black := bgra8888(15, 15, 15)
 	white := bgra8888(255, 255, 255)
 	red := bgra8888(255, 0, 0)
@@ -265,7 +269,7 @@ func (a *app) renderQualityMenu() {
 	}
 }
 
-func (a *app) renderHistory() {
+func (a *app) legacyRenderHistory() {
 	black := bgra8888(15, 15, 15)
 	white := bgra8888(255, 255, 255)
 	red := bgra8888(255, 0, 0)
@@ -317,15 +321,15 @@ func (a *app) drawHistoryIcon(x, y int, color uint32) {
 	a.fb.rect(x+9, y+9, 5, 2, color)
 }
 
-func playStartupAnimation(fb *framebuffer) {
+func legacyPlayStartupAnimation(fb *framebuffer) {
 	for frame := 0; frame < 28; frame++ {
-		renderStartupFrame(fb, frame)
+		legacyRenderStartupFrame(fb, frame)
 		fb.present()
 		time.Sleep(24 * time.Millisecond)
 	}
 }
 
-func renderStartupFrame(fb *framebuffer, frame int) {
+func legacyRenderStartupFrame(fb *framebuffer, frame int) {
 	animation := &app{fb: fb}
 	background := bgra8888(12, 12, 12)
 	white := bgra8888(255, 255, 255)
@@ -374,10 +378,17 @@ func (a *app) drawWifi(x, y int, color uint32) {
 }
 
 func (a *app) drawThumbnail(x, y int, thumbnail *thumbnailImage) {
-	for py := 0; py < thumbHeight; py++ {
-		sy := py * thumbnail.height / thumbHeight
-		for px := 0; px < thumbWidth; px++ {
-			sx := px * thumbnail.width / thumbWidth
+	a.drawThumbnailScaled(x, y, thumbWidth, thumbHeight, thumbnail)
+}
+
+func (a *app) drawThumbnailScaled(x, y, width, height int, thumbnail *thumbnailImage) {
+	if thumbnail == nil || thumbnail.width <= 0 || thumbnail.height <= 0 || width <= 0 || height <= 0 {
+		return
+	}
+	for py := 0; py < height; py++ {
+		sy := py * thumbnail.height / height
+		for px := 0; px < width; px++ {
+			sx := px * thumbnail.width / width
 			pixel := thumbnail.pixels[sy*thumbnail.width+sx]
 			a.fb.pixel(x+px, y+py, pixel)
 		}
@@ -389,11 +400,26 @@ func (a *app) drawPlaceholder(x, y, w, h int, seed string) {
 }
 
 func (a *app) currentResultIndex() int {
-	index := a.page*gridPageSize + a.selected
+	index := a.selected
 	if index < 0 || index >= len(a.results) {
 		return -1
 	}
 	return index
+}
+
+func (a *app) ensureSelectionVisible() bool {
+	previous := a.scrollRow
+	selectedRow := a.selected / gridColumns
+	if selectedRow < a.scrollRow {
+		a.scrollRow = selectedRow
+	}
+	if selectedRow > a.scrollRow+1 {
+		a.scrollRow = selectedRow - 1
+	}
+	if a.scrollRow < 0 {
+		a.scrollRow = 0
+	}
+	return previous != a.scrollRow
 }
 
 func (a *app) resultsOnPage() int {
@@ -416,23 +442,51 @@ func (a *app) pageCount() int {
 }
 
 func (a *app) loadPageThumbnails() {
-	if a.provider == "" || a.resultsOnPage() == 0 {
+	if a.provider == "" || len(a.results) == 0 {
 		return
 	}
 	if a.thumbnails == nil {
 		a.thumbnails = make(map[string]*thumbnailImage)
 	}
-	a.status = "LOADING PREVIEWS..."
-	a.render()
+	showLoading := len(a.thumbnails) == 0
+	var stopLoading func()
+	if showLoading {
+		a.status = "LOADING PREVIEWS..."
+		a.render()
+		stopLoading = a.startLoadingAnimation()
+	}
 
+	start := a.scrollRow * gridColumns
+	end := start + gridPageSize
+	if end > len(a.results) {
+		end = len(a.results)
+	}
+	known := make(map[string]bool, len(a.thumbnails))
+	for videoID := range a.thumbnails {
+		known[videoID] = true
+	}
+	before := len(a.thumbnails)
+	for videoID, image := range fetchThumbnails(a.client, a.provider, a.results[start:end], known) {
+		a.thumbnails[videoID] = image
+	}
+	log.Printf("thumbnail window start=%d end=%d loaded=%d", start, end, len(a.thumbnails)-before)
+	if stopLoading != nil {
+		stopLoading()
+	}
+	if a.section == "RECOMMENDED" {
+		a.status = fmt.Sprintf("%d RECOMMENDATIONS", len(a.results))
+	} else {
+		a.status = fmt.Sprintf("%d RESULTS", len(a.results))
+	}
+}
+
+func fetchThumbnails(client *invidious.Client, provider string, videos []invidious.Video, known map[string]bool) map[string]*thumbnailImage {
+	images := make(map[string]*thumbnailImage)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	semaphore := make(chan struct{}, 2)
-	start := a.page * gridPageSize
-	end := start + a.resultsOnPage()
-	for index := start; index < end; index++ {
-		video := a.results[index]
-		if _, exists := a.thumbnails[video.VideoID]; exists {
+	semaphore := make(chan struct{}, 3)
+	for _, video := range videos {
+		if known[video.VideoID] {
 			continue
 		}
 		thumbnail, ok := invidious.BestThumbnail(video)
@@ -444,45 +498,51 @@ func (a *app) loadPageThumbnails() {
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
-			endpoint, err := invidious.ResolveURL(a.provider, candidate.URL)
-			if err != nil {
-				return
+
+			endpoints := []string{fmt.Sprintf("https://i.ytimg.com/vi/%s/mqdefault.jpg", url.PathEscape(videoID))}
+			if endpoint, err := invidious.ResolveURL(provider, candidate.URL); err == nil && endpoint != endpoints[0] {
+				endpoints = append(endpoints, endpoint)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
-			defer cancel()
-			data, err := a.client.FetchBytes(ctx, endpoint, 900<<10)
-			if err != nil {
-				return
+			var decoded image.Image
+			var lastErr error
+			for _, endpoint := range endpoints {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				data, err := client.FetchBytes(ctx, endpoint, 900<<10)
+				cancel()
+				if err == nil {
+					decoded, err = decodeThumbnail(data)
+				}
+				if err == nil {
+					break
+				}
+				lastErr = err
 			}
-			decoded, err := decodeThumbnail(data)
-			if err != nil {
+			if decoded == nil {
+				logOperationFailure("thumbnail", lastErr)
 				return
 			}
 			image := quantizeThumbnail(decoded, thumbWidth, thumbHeight)
 			mu.Lock()
-			a.thumbnails[videoID] = image
+			images[videoID] = image
 			mu.Unlock()
 		}(video.VideoID, thumbnail)
 	}
 	wg.Wait()
-	if a.section == "RECOMMENDED" {
-		a.status = fmt.Sprintf("%d RECOMMENDATIONS", len(a.results))
-	} else {
-		a.status = fmt.Sprintf("%d RESULTS", len(a.results))
-	}
+	return images
 }
 
 const maxThumbnailPixels = 1024 * 1024
 
 func decodeThumbnail(data []byte) (image.Image, error) {
-	config, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	if config.Width <= 0 || config.Height <= 0 || config.Width > 2048 || config.Height > 2048 || config.Width > maxThumbnailPixels/config.Height {
 		return nil, errors.New("thumbnail dimensions exceed safety limit")
 	}
-	return jpeg.Decode(bytes.NewReader(data))
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	return decoded, err
 }
 
 func quantizeThumbnail(source image.Image, width, height int) *thumbnailImage {
